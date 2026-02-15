@@ -90,21 +90,48 @@ Each BLR gets annotated with its provenance (e.g., `PP[42] Widget.build`, `THR.A
 
 Call edges and CFGs are converted to [lattice](https://github.com/zboralski/lattice) types — an architecture-neutral graph IR shared with SpiderMonkey-dumper (for JS bytecode analysis). The lattice library provides DOT rendering.
 
-Per-function CFG DOT files are written with the Japanese minimalist style from lattice. The call graph is rendered with NASA/Bauhaus style.
+### Decompilation (Ghidra + IDA)
 
-### Ghidra integration
+Both decompilers share a common metadata pipeline. `flutter-meta` generates `flutter_meta.json` with function names, class struct layouts, THR fields, string references, and pointer size metadata. Each decompiler's script consumes this file.
 
-The `decompile` command runs a full Ghidra headless pipeline:
+**Ghidra** (`unflutter decompile`) runs a headless pipeline:
 
-1. Generates `ghidra_meta.json` with function names, class struct layouts, THR fields, string references, and pointer size metadata
-2. Runs `analyzeHeadless` with a pre-script (disables problematic analyzers) and post-script that:
+1. Pre-script registers a `__dartcall` calling convention via `SpecExtension` (marks X15/X26-X28 as unaffected, kills scratch registers)
+2. Post-script applies all metadata:
    - Disassembles at all known function addresses
    - Creates/renames functions
    - Creates Dart class struct types with correct field sizes (4-byte for compressed pointers, 8-byte otherwise)
-   - Creates a `DartThread` struct for THR (X26) accesses
+   - Creates a `DartThread` struct (200 fields) for THR (X26) accesses
    - Applies typed function signatures (`this` pointer, parameter count, return type)
    - Sets EOL comments for THR fields, PP pool references, and string literals
-   - Decompiles and exports selected functions as `.c` files
+   - **Register retyping**: renames decompiler variables for Dart-specific registers and types X26 as `DartThread*`, enabling struct field resolution:
+
+| Register | Variable | Purpose |
+| -------- | ------------------- | ----------------------------------------------- |
+| X15      | `SHADOW_SP`         | Dart shadow call stack                          |
+| X21      | `DT`                | Dispatch table pointer                          |
+| X22      | `DART_NULL`         | Dart null object                                |
+| X26      | `THR` (DartThread*) | Thread pointer — field accesses resolve to names |
+| X27      | `PP`                | Object pool pointer                             |
+| X28      | `HEAP_BASE`         | Compressed pointer base                         |
+| X29      | `FP`                | Frame pointer                                   |
+| X30      | `LR`                | Link register                                   |
+
+**IDA** (`unflutter ida`) runs via idalib (headless):
+
+1. Generates C header with all struct types, parsed via `idc_parse_types()` in one shot
+2. Creates functions with Dart checked/unchecked entry point splitting (splits IDA-merged functions at metadata addresses)
+3. Applies function signatures via `apply_type()` (IL2CppDumper pattern)
+4. Sets repeatable comments (visible in Hex-Rays decompiler)
+5. Hex-Rays register retyping (same register table as Ghidra)
+
+**Ghidra vs IDA output quality:**
+
+Ghidra wins on readability: struct field resolution (`THR->stack_limit` vs `THR + 72`), indexed access (`SHADOW_SP[-2]` vs `*(_QWORD*)(SHADOW_SP - 16)`), and no `_QWORD`/`_DWORD` casts.
+
+IDA wins on type cleanliness: zero `undefined` types, zero `unaff_` register names, zero warnings. IDA uses `__int64` and `_QWORD` casts which are verbose but type-correct.
+
+The THR struct field resolution gap is a Hex-Rays microcode limitation — `set_lvar_type()` doesn't restructure the decompiler's AST to use struct member syntax.
 
 ### Version handling
 
@@ -118,8 +145,8 @@ The `decompile` command runs a full Ghidra headless pipeline:
 | 2.17.6 | CID-Shift1 | Uncompressed | Last unsigned-ref version |
 | 2.18.0 | CID-Shift1 | Compressed | Signed refs, compressed pointers |
 | 2.19.0 | CID-Shift1 | Compressed | 64-byte alignment |
-| 3.0.5–3.3.0 | CID-Shift1 | Compressed | Progressive CID table changes |
-| 3.4.3–3.10.7 | ObjectHeader | Compressed | New tag encoding, record types |
+| 3.0.5-3.3.0 | CID-Shift1 | Compressed | Progressive CID table changes |
+| 3.4.3-3.10.7 | ObjectHeader | Compressed | New tag encoding, record types |
 
 No version-conditional architecture. The version hash selects a constraint set. Same pipeline runs.
 
@@ -137,75 +164,101 @@ Ghidra integration requires Ghidra 11.x with Jython support. Auto-detected from 
 
 ## Usage
 
+### Full pipeline (default)
+
+```bash
+unflutter libapp.so
+```
+
+Runs ELF parse, disassembly, signal analysis, and metadata generation in one shot:
+
+```text
+elf Dart SDK 3.10.7
+
+code 284352 bytes at VA 0x569a8
+  instructions: 1465 entries (0 stubs + 1465 code)
+  ranges: 1465 (0 stubs + 1465 code)
+  classes: 402 layouts
+
+disasm 1465 functions, pool 1511 entries (1318 resolved)
+  functions: 1465 -> samples/evil-patched.unflutter/asm
+  call edges: 5937 (822 BLR: 757 annotated, 65 unannotated)
+  string refs: 620
+  BLR annotation: 92.1%
+
+signal 71 signal + 1076 context, 4178 edges
+  net: 40
+  url: 4
+  base64: 1
+  cloaking: 1
+  asm snippets: 1142
+  -> signal_graph.json (900218 bytes)
+  -> signal.html (456296 bytes)
+  -> signal.dot (5809 bytes)
+  -> signal_cfg.dot (51 functions, 50855 bytes)
+  -> signal.svg (18136 bytes)
+  -> signal_cfg.svg (145979 bytes)
+
+meta 1465 functions
+  focus: 71 signal functions (use --all for everything)
+  dart: 3.10.7  ptr_size: 4  thr_fields: 272
+  classes: 402 layouts
+  comments: 1363 from asm files
+  string refs: +461 comments
+  -> flutter_meta.json (577230 bytes)
+
+summary
+  output:     samples/evil-patched.unflutter
+  dart:       3.10.7
+  functions:  1465
+  classes:    402
+  signal:     71
+
+next
+  open samples/evil-patched.unflutter/signal.html
+  unflutter ghidra libapp.so --from samples/evil-patched.unflutter
+  unflutter ida libapp.so --from samples/evil-patched.unflutter
+```
+
+Use `--quiet` / `-q` to suppress verbose output. Use `--out` to set the output directory (default: `<basename>.unflutter/`).
+
 ### Quick scan
 
 ```bash
-unflutter scan --lib libapp.so           # print snapshot info
-unflutter strings --lib libapp.so        # extract strings
+unflutter scan libapp.so           # print snapshot info
 ```
 
-### Disassembly
+### Signal only (skip metadata)
+
+The default pipeline already includes signal analysis. Use `unflutter signal` to run the same pipeline but skip the metadata generation stage:
 
 ```bash
-# Basic disassembly — functions, call edges, string refs, class layouts
-unflutter disasm --lib libapp.so --out out/target
-
-# With call graph + per-function CFG DOT files
-unflutter disasm --lib libapp.so --out out/target --graph
+unflutter signal libapp.so                    # default pipeline without meta
+unflutter signal libapp.so -k 3               # custom context depth (default: 2)
+unflutter signal libapp.so --from out/target   # rerun signal from existing disasm
 ```
-
-Output lands in `out/target/`:
-
-- `functions.jsonl` — every recovered function with name, address, size
-- `call_edges.jsonl` — BL/BLR edges with resolved targets
-- `string_refs.jsonl` — string references from object pool loads
-- `asm/` — annotated ARM64 disassembly per function (with THR/PP annotations)
-- `callgraph.dot`, `cfg/*.dot` — graph output (when `--graph` is set)
-
-### Signal analysis
-
-Signal finds functions with behavioral relevance — networking, crypto, cloaking, auth, etc. — and builds a context graph around them.
-
-```bash
-# Run signal on disasm output
-unflutter signal --in out/target
-
-# Custom context depth (default: 2 hops from signal functions)
-unflutter signal --in out/target -k 3
-
-# Skip asm loading (faster, no asm in HTML)
-unflutter signal --in out/target --no-asm
-
-# Custom output path
-unflutter signal --in out/target --out /tmp/report.html
-```
-
-Produces:
-
-- `signal.html` — self-contained interactive report with function cards, asm, string refs, category badges
-- `signal_graph.json` — machine-readable signal graph
-- `signal.dot` / `signal.svg` — call graph of signal + context functions
-- `signal_cfg.dot` / `signal_cfg.svg` — CFG with calls and classified strings per signal function
-
-If [Graphviz](https://graphviz.org/) is installed, SVGs are auto-rendered. Otherwise the command prints manual render instructions.
 
 ### Ghidra decompilation
 
-> **Note:** Ghidra decompilation works but output quality is still being improved. ARM64 Dart AOT code uses unconventional calling conventions (X26=thread, X27=pool, compressed pointers) that Ghidra's default analysis doesn't handle well. The pre/post scripts partially address this, but expect noisy output for complex functions.
-
 ```bash
-# Decompile signal functions (crypto, networking, cloaking, etc.)
-unflutter decompile --in out/target --lib libapp.so
-
-# Decompile ALL functions
-unflutter decompile --in out/target --lib libapp.so --all
+unflutter ghidra libapp.so                    # full pipeline + Ghidra headless
+unflutter ghidra libapp.so --from out/target   # reuse existing disasm output
+unflutter ghidra libapp.so --all               # decompile ALL functions
 ```
 
-Or via make:
+### IDA decompilation
 
 ```bash
-make disasm SAMPLE=path/to/libapp.so
-make ghidra SAMPLE=path/to/libapp.so
+unflutter ida libapp.so                       # full pipeline + IDA idalib
+unflutter ida libapp.so --from out/target      # reuse existing disasm output
+unflutter ida libapp.so --all                  # decompile ALL functions
+```
+
+### Metadata only
+
+```bash
+unflutter meta libapp.so                      # full pipeline, produce flutter_meta.json
+unflutter meta --from out/target               # regenerate from existing disasm
 ```
 
 ### Output artifacts
@@ -217,7 +270,7 @@ make ghidra SAMPLE=path/to/libapp.so
 | `classes.jsonl` | Class layouts: fields, offsets, instance sizes |
 | `string_refs.jsonl` | String references from PP loads |
 | `dart_meta.json` | Snapshot metadata: Dart version, pointer size, THR fields |
-| `ghidra_meta.json` | Ghidra-ready metadata: all of the above merged |
+| `flutter_meta.json` | Unified metadata for Ghidra/IDA: functions, classes, THR fields, comments |
 | `asm/*.txt` | Annotated ARM64 disassembly per function |
 | `cfg/*.dot` | Per-function control flow graphs (with `--graph`) |
 | `callgraph.dot` | Full call graph (with `--graph`) |

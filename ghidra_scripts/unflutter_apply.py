@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # unflutter_apply.py - Ghidra headless postScript
 #
-# Reads ghidra_meta.json produced by `unflutter ghidra-meta`, applies:
+# Reads flutter_meta.json produced by `unflutter meta`, applies:
 #   1. Function creation + renaming
 #   2. Struct types for Dart classes + typed function signatures
 #   3. EOL comments (THR fields, PP pool references)
@@ -12,10 +12,10 @@
 #       -import <libapp.so> -overwrite \
 #       -scriptPath <path_to_this_dir> \
 #       -preScript unflutter_prescript.py \
-#       -postScript unflutter_apply.py <ghidra_meta.json> [<output_dir>]
+#       -postScript unflutter_apply.py <flutter_meta.json> [<output_dir>]
 #
 # Script args:
-#   arg[0]: path to ghidra_meta.json (required)
+#   arg[0]: path to flutter_meta.json (required)
 #   arg[1]: output directory for decompiled .c files (optional)
 
 import json
@@ -24,11 +24,19 @@ import os
 from ghidra.program.model.symbol import SourceType
 from ghidra.program.model.data import (
     Pointer64DataType, Pointer32DataType, PointerDataType,
-    StructureDataType, CategoryPath,
+    StructureDataType, CategoryPath, VoidDataType, LongDataType,
+    IntegerDataType,
 )
 from ghidra.program.model.listing import ParameterImpl
 from ghidra.program.model.listing import Function as GhidraFunction
+from java.util import ArrayList
 from ghidra.app.decompiler import DecompInterface
+
+try:
+    from ghidra.program.model.pcode import HighFunctionDBUtil
+    HAS_HFDB_UTIL = True
+except:
+    HAS_HFDB_UTIL = False
 
 try:
     from ghidra.program.model.data import DataTypeConflictHandler
@@ -37,13 +45,30 @@ except:
     REPLACE_HANDLER = None
 
 
+def resolve_meta_path(args):
+    """Resolve flutter_meta.json path from script args or relative to this script."""
+    if args and len(args) >= 1 and args[0]:
+        return args[0]
+    # Standalone mode: look for ../flutter_meta.json relative to this script.
+    try:
+        script_dir = os.path.dirname(os.path.abspath(sourceFile.getAbsolutePath()))
+    except:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+    candidate = os.path.join(script_dir, "..", "flutter_meta.json")
+    if os.path.exists(candidate):
+        return candidate
+    raise RuntimeError(
+        "flutter_meta.json not found. Pass as script argument or place this script in <output>/ghidra/"
+    )
+
+
 def main():
     args = getScriptArgs()
-    if len(args) < 1:
-        println("ERROR: missing ghidra_meta.json path argument")
+    try:
+        meta_path = resolve_meta_path(args)
+    except RuntimeError as e:
+        println("ERROR: %s" % str(e))
         return
-
-    meta_path = args[0]
     out_dir = args[1] if len(args) > 1 else None
 
     println("unflutter_apply: loading %s" % meta_path)
@@ -76,16 +101,17 @@ def main():
     pointer_size = meta.get("pointer_size", 8)
     println("  pointer_size: %d" % pointer_size)
 
-    # ptr_type = full 64-bit pointer (for return types, params — always 8 bytes in AArch64).
-    ptr_type = Pointer64DataType.dataType
+    # ptr_type = pointer to void (for return types, params — always 8 bytes in AArch64).
+    # PointerDataType(VoidDataType()) renders as "void *" instead of "undefined *".
+    ptr_type = PointerDataType(VoidDataType())
 
     # field_type = type used for Dart object fields inside structs.
     # With compressed pointers (4 bytes), fields are 32-bit pointers.
     # Without compression (8 bytes), fields are 64-bit pointers.
     if pointer_size == 4:
-        field_type = Pointer32DataType.dataType
+        field_type = Pointer32DataType()
     else:
-        field_type = Pointer64DataType.dataType
+        field_type = PointerDataType(VoidDataType())
 
     # Phase 1a: Force disassembly at all function addresses.
     # Ghidra's auto-analysis skips Dart AOT code (no standard prologues).
@@ -226,11 +252,23 @@ def main():
     else:
         println("Phase 1c2: skipped (no THR fields)")
 
+    # Prepare DartThread* type for register retyping in decompiler output.
+    # When x26 is typed as DartThread*, the decompiler resolves
+    # *(long *)(unaff_x26 + 0x38) → THR->stack_limit automatically.
+    dart_thread_ptr_dt = None
+    if thr_fields and HAS_HFDB_UTIL:
+        dtm_check = currentProgram.getDataTypeManager()
+        resolved = dtm_check.getDataType(CategoryPath("/DartClasses"), "DartThread")
+        if resolved:
+            dart_thread_ptr_dt = PointerDataType(resolved)
+            println("  DartThread* ready for register retyping")
+
     # Phase 1d: Apply function signatures (typed parameters + return type).
     # For methods (functions with an owner class):
     #   - First param = this: Dart_OwnerClass* (typed pointer to owner struct)
     #   - Remaining params = generic pointers
     # For all functions:
+    #   - Calling convention = __dartcall (registered by prescript via SpecExtension)
     #   - Return type = pointer (Dart functions return objects, not undefined)
     println("Phase 1d: applying function signatures...")
     sig_applied = 0
@@ -246,6 +284,13 @@ def main():
         owner = entry.get("owner", "")
         pc = entry.get("param_count", 0)
 
+        # Set calling convention to __dartcall (registered by prescript).
+        # Must happen BEFORE replaceParameters to avoid "Unknown calling convention" warning.
+        try:
+            fn.setCallingConventionName("__dartcall")
+        except:
+            pass
+
         # Set return type to pointer (Dart returns objects, not undefined).
         try:
             fn.setReturnType(ptr_type, SourceType.USER_DEFINED)
@@ -253,8 +298,8 @@ def main():
         except:
             pass
 
-        # Build parameter list.
-        params = []
+        # Build parameter list (ArrayList for JPype/PyGhidra overload resolution).
+        params = ArrayList()
 
         # Methods get typed 'this' as first parameter.
         # param_count excludes implicit 'this', so we add it separately.
@@ -264,13 +309,13 @@ def main():
                 this_typed += 1
             else:
                 this_dt = ptr_type
-            params.append(ParameterImpl("this", this_dt, currentProgram))
+            params.add(ParameterImpl("this", this_dt, currentProgram))
 
         # Explicit parameters.
         for i in range(pc):
-            params.append(ParameterImpl("p%d" % i, ptr_type, currentProgram))
+            params.add(ParameterImpl("p%d" % i, ptr_type, currentProgram))
 
-        if not params:
+        if params.size() == 0:
             continue
 
         try:
@@ -278,8 +323,10 @@ def main():
                 GhidraFunction.FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS,
                 True, SourceType.USER_DEFINED)
             sig_applied += 1
-        except:
+        except Exception as e:
             sig_failed += 1
+            if sig_failed <= 3:
+                println("  WARN: replaceParameters failed for %s: %s" % (entry.get("name", "?"), str(e)[:120]))
 
     println("  signatures applied=%d failed=%d return_types=%d this_typed=%d" % (
         sig_applied, sig_failed, ret_applied, this_typed))
@@ -355,10 +402,33 @@ def main():
                 stats["decompile_failed"] += 1
                 continue
 
+            # Retype Dart registers for readable decompiler output:
+            #   x26 → THR (DartThread*)  — resolves field accesses
+            #   x27 → PP               — object pool pointer
+            #   x28 → HEAP_BASE        — compressed pointer base
+            #   x15 → SHADOW_SP        — Dart shadow call stack
+            if result and result.decompileCompleted() and HAS_HFDB_UTIL:
+                hfunc = result.getHighFunction()
+                if hfunc:
+                    retyped = _retype_dart_registers(
+                        hfunc, dart_thread_ptr_dt, ptr_type)
+                    if retyped:
+                        try:
+                            result = ifc.decompileFunction(fn, 60, monitor)
+                        except:
+                            pass
+
             if result and result.decompileCompleted():
                 decomp = result.getDecompiledFunction()
                 if decomp:
                     c_code = decomp.getC()
+                    # Strip cosmetic warning from SpecExtension-registered CC.
+                    # The native decompiler doesn't receive SpecExtension CCs,
+                    # so it flags __dartcall as unknown. The CC works functionally.
+                    c_code = c_code.replace(
+                        "/* WARNING: Unknown calling convention -- yet parameter storage is locked */\n\n", "")
+                    c_code = c_code.replace(
+                        "/* WARNING: Unknown calling convention -- yet parameter storage is locked */\n", "")
                     safe_name = addr_str.replace("0x", "") + "_" + sanitize(fn_name)
                     # Use owner-based subdirectory if available.
                     owner = owner_by_addr.get(addr_str, "")
@@ -421,6 +491,90 @@ def main():
         stats["decompiled"],
         stats["decompile_failed"],
     ))
+
+
+def _retype_dart_registers(hfunc, dart_thread_ptr_dt, ptr_type):
+    """Retype Dart-specific unaffected registers for readable decompiler output.
+
+    Renames and types:
+      x15 → SHADOW_SP   (long*)  Dart shadow call stack
+      x21 → DT          (long)  dispatch table pointer
+      x22 → DART_NULL   (long)  Dart null object
+      x26 → THR         (DartThread*)  resolves struct field accesses
+      x27 → PP          (long*)  object pool pointer (indexed)
+      x28 → HEAP_BASE   (long)  compressed pointer base
+      x29 → FP          (long)  frame pointer
+      x30 → LR          (long)  link register / return address
+
+    Also handles 32-bit subregister variants (w22, etc.) and Ghidra's
+    internal register-space names (unaff_000040b4 = upper half of x22).
+
+    Returns True if any symbols were retyped (caller should re-decompile).
+    """
+    long_type = LongDataType()
+    int_type = IntegerDataType()  # 4 bytes — for w-regs and upper halves
+    long_ptr_type = PointerDataType(long_type)  # long * — for stack/pool pointers
+
+    # Map unaff_/in_ names to (readable_name, type).
+    # None type = keep existing type.
+    RENAMES = {
+        # 64-bit registers — typed to eliminate undefined8
+        "unaff_x15": ("SHADOW_SP",    long_ptr_type),  # Dart shadow stack
+        "unaff_x21": ("DT",           long_type),
+        "unaff_x22": ("DART_NULL",    long_type),
+        "unaff_x26": ("THR",          dart_thread_ptr_dt),  # DartThread*
+        "unaff_x27": ("PP",           long_ptr_type),  # pool pointer — indexed
+        "unaff_x28": ("HEAP_BASE",    long_type),
+        "unaff_x29": ("FP",           long_type),
+        "unaff_x30": ("LR",           long_type),
+        # 32-bit subregister variants (w-regs) — typed as int to eliminate undefined4
+        "unaff_w15": ("SHADOW_SP",    int_type),
+        "unaff_w21": ("DT",           int_type),
+        "unaff_w22": ("DART_NULL",    int_type),
+        "unaff_w26": ("THR",          int_type),
+        "unaff_w27": ("PP",           int_type),
+        "unaff_w28": ("HEAP_BASE",    int_type),
+        "unaff_w29": ("FP",           int_type),
+        "unaff_w30": ("LR",           int_type),
+        # Upper 32-bit halves (Ghidra register-space offsets)
+        # These are internal split-register names — type as int
+        "unaff_000040b4":         ("DART_NULL_HI", int_type),   # upper x22
+        "in_register_00004004":   ("x0_HI",        int_type),   # upper x0
+        "in_register_0000400c":   ("x1_HI",        int_type),   # upper x1
+        "in_register_00004014":   ("x2_HI",        int_type),   # upper x2
+        "in_register_0000401c":   ("x3_HI",        int_type),   # upper x3
+        "in_register_00004024":   ("x4_HI",        int_type),   # upper x4
+        "in_register_0000402c":   ("x5_HI",        int_type),   # upper x5
+        "in_register_00004034":   ("x6_HI",        int_type),   # upper x6
+        "in_register_0000403c":   ("x7_HI",        int_type),   # upper x7
+        # 32-bit parameter in-registers (w0-w7)
+        "in_w0":  ("p0",    int_type),
+        "in_w1":  ("p1",    int_type),
+        "in_w2":  ("p2",    int_type),
+        "in_w3":  ("p3",    int_type),
+        "in_w4":  ("p4",    int_type),
+        "in_w5":  ("p5",    int_type),
+        "in_w6":  ("p6",    int_type),
+        "in_w7":  ("p7",    int_type),
+    }
+
+    did_retype = False
+    lsm = hfunc.getLocalSymbolMap()
+    # Snapshot the iterator to avoid ConcurrentModificationException.
+    symbols = list(lsm.getSymbols())
+    for sym in symbols:
+        entry = RENAMES.get(sym.getName())
+        if entry is None:
+            continue
+        new_name, new_dt = entry
+        try:
+            dt = new_dt if new_dt else sym.getDataType()
+            HighFunctionDBUtil.updateDBVariable(
+                sym, new_name, dt, SourceType.USER_DEFINED)
+            did_retype = True
+        except:
+            pass
+    return did_retype
 
 
 def sanitize(name):

@@ -65,13 +65,8 @@ func cmdParity(args []string) error {
 	for _, hash := range hashes {
 		row := runParitySample(filepath.Join(*samplesDir, hash, "libapp.so"), hash, opts)
 		rows = append(rows, row)
-		status := row.Status
-		if row.Error != "" {
-			status += ": " + row.Error
-		}
 		fmt.Fprintf(os.Stderr, "%-34s %-8s %-12s strings=%-6d named=%-6d codes=%-6d codemap=%-6d\n",
 			hash, row.DartVersion, row.Status, row.Strings, row.Named, row.Codes, row.CodeMap)
-		_ = status
 	}
 
 	if err := os.MkdirAll(*outDir, 0755); err != nil {

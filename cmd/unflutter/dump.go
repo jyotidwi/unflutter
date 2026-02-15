@@ -16,7 +16,7 @@ func cmdDump(args []string) error {
 	fs := flag.NewFlagSet("dump", flag.ExitOnError)
 	libapp := fs.String("lib", "", "path to libapp.so")
 	outDir := fs.String("out", "", "output directory")
-	_ = fs.String("profile", "", "override version profile")
+	_ = fs.String("profile", "", "override version profile (not yet implemented)")
 	strict := fs.Bool("strict", false, "fail on first structural error")
 	maxSteps := fs.Int("max-steps", 0, "global loop cap")
 

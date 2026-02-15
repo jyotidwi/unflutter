@@ -18,7 +18,6 @@ func cmdScan(args []string) error {
 	strict := fs.Bool("strict", false, "fail on first structural error")
 	maxSteps := fs.Int("max-steps", 0, "global loop cap")
 	jsonOut := fs.Bool("json", false, "output as JSON")
-	_ = profile // used later
 
 	if err := fs.Parse(args); err != nil {
 		return err

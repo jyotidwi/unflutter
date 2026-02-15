@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/binary"
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -12,6 +11,7 @@ import (
 	"strings"
 
 	"unflutter/internal/disasm"
+	"unflutter/internal/pipeline"
 	"unflutter/internal/render"
 )
 
@@ -257,8 +257,6 @@ func decodeRawInsts(data []byte, baseAddr uint64) []disasm.Inst {
 	return insts
 }
 
-// NOTE: sanitizeFilename is defined in disasm.go (same package)
-
 // runDot invokes graphviz dot to produce the given format.
 func runDot(dotPath, outPath, format string) error {
 	cmd := exec.Command("dot", "-T"+format, "-o", outPath, dotPath)
@@ -266,22 +264,7 @@ func runDot(dotPath, outPath, format string) error {
 	return cmd.Run()
 }
 
-// readJSONL reads a JSONL file into a slice of T.
+// readJSONL delegates to pipeline.ReadJSONL.
 func readJSONL[T any](path string) ([]T, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	var records []T
-	dec := json.NewDecoder(f)
-	for dec.More() {
-		var rec T
-		if err := dec.Decode(&rec); err != nil {
-			return records, fmt.Errorf("line %d: %w", len(records)+1, err)
-		}
-		records = append(records, rec)
-	}
-	return records, nil
+	return pipeline.ReadJSONL[T](path)
 }

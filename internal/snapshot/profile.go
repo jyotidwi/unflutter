@@ -43,7 +43,6 @@ func DetectProfile(hdr *Header) Profile {
 		}
 	}
 
-	// Check for arm64 android
 	hasARM64 := false
 	hasAndroid := false
 	for _, f := range features {

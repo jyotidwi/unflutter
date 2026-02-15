@@ -9,6 +9,14 @@ import (
 	"strings"
 )
 
+// ghidraLauncher holds the command and any prefix args needed to run Ghidra headless.
+// For Ghidra <12 (Jython): cmd=analyzeHeadless, prefix=nil.
+// For Ghidra 12+ (PyGhidra): cmd=pyghidraRun, prefix=["-H"].
+type ghidraLauncher struct {
+	cmd    string   // path to the launcher binary
+	prefix []string // args inserted before analyzeHeadless args (e.g. ["-H"])
+}
+
 func cmdDecompile(args []string) error {
 	fs := flag.NewFlagSet("decompile", flag.ExitOnError)
 	inDir := fs.String("in", "", "input directory (disasm output)")
@@ -25,21 +33,21 @@ func cmdDecompile(args []string) error {
 	}
 
 	// 1. Find Ghidra.
-	analyzeHeadless, ghHome, err := findGhidra(*ghidraHome)
+	ghLauncher, ghHome, err := findGhidra(*ghidraHome)
 	if err != nil {
 		return err
 	}
 	fmt.Fprintf(os.Stderr, "ghidra: %s\n", ghHome)
 
-	// 2. Generate ghidra_meta.json (always regenerate to pick up --all).
-	metaPath := filepath.Join(*inDir, "ghidra_meta.json")
+	// 2. Generate flutter_meta.json (always regenerate to pick up --all).
+	metaPath := filepath.Join(*inDir, "flutter_meta.json")
 	metaArgs := []string{"--in", *inDir, "--out", metaPath}
 	if *decompAll {
 		metaArgs = append(metaArgs, "--decompile-all")
 	}
-	fmt.Fprintf(os.Stderr, "generating ghidra_meta.json...\n")
-	if err := cmdGhidraMeta(metaArgs); err != nil {
-		return fmt.Errorf("ghidra-meta: %w", err)
+	fmt.Fprintf(os.Stderr, "generating flutter_meta.json...\n")
+	if err := cmdFlutterMeta(metaArgs); err != nil {
+		return fmt.Errorf("flutter-meta: %w", err)
 	}
 
 	// 3. Find libapp.so if not specified.
@@ -101,6 +109,7 @@ func cmdDecompile(args []string) error {
 		projectName,
 		"-import", absLibPath,
 		"-overwrite",
+		"-processor", "AARCH64:LE:64:v8A",
 		"-scriptPath", scriptPath,
 		"-preScript", "unflutter_prescript.py",
 		"-postScript", "unflutter_apply.py", absMetaPath, absDecompDir,
@@ -115,7 +124,7 @@ func cmdDecompile(args []string) error {
 		}
 	}
 
-	cmd := exec.Command(analyzeHeadless, ghidraArgs...)
+	cmd := exec.Command(ghLauncher.cmd, append(ghLauncher.prefix, ghidraArgs...)...)
 	cmd.Env = env
 	cmd.Stdout = os.Stderr // Ghidra output goes to stderr.
 	cmd.Stderr = os.Stderr
@@ -137,97 +146,60 @@ func cmdDecompile(args []string) error {
 	return nil
 }
 
-// findGhidra locates the Ghidra installation and analyzeHeadless binary.
+// findGhidra locates the Ghidra installation and returns a launcher.
 // Search order:
 //  1. --ghidra-home flag
-//  2. GHIDRA_HOME environment variable
+//  2. GHIDRA_HOME or UNFLUTTER_GHIDRA_HOME environment variable
 //  3. analyzeHeadless in PATH
 //  4. ghidraRun in PATH → derive installation directory
-//  5. Common brew paths
-func findGhidra(explicitHome string) (analyzeHeadless string, ghidraHome string, err error) {
+//  5. brew --prefix ghidra
+func findGhidra(explicitHome string) (launcher ghidraLauncher, ghidraHome string, err error) {
 	// 1. Explicit --ghidra-home.
 	if explicitHome != "" {
-		ah := filepath.Join(explicitHome, "support", "analyzeHeadless")
-		if _, err := os.Stat(ah); err == nil {
-			return ah, explicitHome, nil
+		if l, home, ok := probeGhidraHome(explicitHome); ok {
+			return l, home, nil
 		}
-		return "", "", fmt.Errorf("analyzeHeadless not found at %s/support/analyzeHeadless", explicitHome)
+		return ghidraLauncher{}, "", fmt.Errorf("analyzeHeadless not found in %s", explicitHome)
 	}
 
-	// 2. GHIDRA_HOME environment variable.
-	if gh := os.Getenv("GHIDRA_HOME"); gh != "" {
-		ah := filepath.Join(gh, "support", "analyzeHeadless")
-		if _, err := os.Stat(ah); err == nil {
-			return ah, gh, nil
+	// 2. GHIDRA_HOME or UNFLUTTER_GHIDRA_HOME environment variable.
+	for _, env := range []string{"GHIDRA_HOME", "UNFLUTTER_GHIDRA_HOME"} {
+		if gh := os.Getenv(env); gh != "" {
+			if l, home, ok := probeGhidraHome(gh); ok {
+				return l, home, nil
+			}
 		}
 	}
 
 	// 3. analyzeHeadless in PATH.
 	if ah, err := exec.LookPath("analyzeHeadless"); err == nil {
-		// Derive home: support/analyzeHeadless → parent/parent.
 		home := filepath.Dir(filepath.Dir(ah))
-		return ah, home, nil
+		return ghidraLauncher{cmd: ah}, home, nil
 	}
 
 	// 4. ghidraRun in PATH → parse to find install dir.
 	if gr, err := exec.LookPath("ghidraRun"); err == nil {
 		home := deriveGhidraHome(gr)
 		if home != "" {
-			ah := filepath.Join(home, "support", "analyzeHeadless")
-			if _, err := os.Stat(ah); err == nil {
-				return ah, home, nil
+			if l, h, ok := probeGhidraHome(home); ok {
+				return l, h, nil
 			}
 		}
 	}
 
-	// 5. Common brew Caskroom paths (Ghidra <12 with Jython support).
-	caskPaths := []string{
-		"/opt/homebrew/Caskroom/ghidra",
-		"/usr/local/Caskroom/ghidra",
-	}
-	for _, cp := range caskPaths {
-		if versions, err := os.ReadDir(cp); err == nil {
-			for i := len(versions) - 1; i >= 0; i-- {
-				v := versions[i]
-				if !v.IsDir() {
-					continue
-				}
-				// Caskroom layout: ghidra/<ver>/ghidra_<ver>_PUBLIC/support/analyzeHeadless
-				subs, _ := os.ReadDir(filepath.Join(cp, v.Name()))
-				for _, sub := range subs {
-					if !sub.IsDir() {
-						continue
-					}
-					ah := filepath.Join(cp, v.Name(), sub.Name(), "support", "analyzeHeadless")
-					if _, err := os.Stat(ah); err == nil {
-						return ah, filepath.Join(cp, v.Name(), sub.Name()), nil
-					}
-				}
-			}
+	// 5. brew --prefix ghidra.
+	if out, err := exec.Command("brew", "--prefix", "ghidra").Output(); err == nil {
+		prefix := strings.TrimSpace(string(out))
+		if l, home, ok := probeGhidraHome(prefix); ok {
+			return l, home, nil
+		}
+		// Cellar layout: prefix/libexec is the real Ghidra home.
+		if l, home, ok := probeGhidraHome(filepath.Join(prefix, "libexec")); ok {
+			return l, home, nil
 		}
 	}
 
-	// 6. Common brew Cellar paths (Ghidra 12+ — may need PyGhidra for Python scripts).
-	cellarPaths := []string{
-		"/opt/homebrew/Cellar/ghidra",
-		"/usr/local/Cellar/ghidra",
-	}
-	for _, bp := range cellarPaths {
-		if versions, err := os.ReadDir(bp); err == nil {
-			for i := len(versions) - 1; i >= 0; i-- {
-				v := versions[i]
-				if !v.IsDir() {
-					continue
-				}
-				ah := filepath.Join(bp, v.Name(), "libexec", "support", "analyzeHeadless")
-				if _, err := os.Stat(ah); err == nil {
-					return ah, filepath.Join(bp, v.Name(), "libexec"), nil
-				}
-			}
-		}
-	}
-
-	return "", "", fmt.Errorf(`Ghidra not found
+	return ghidraLauncher{}, "", fmt.Errorf(`Ghidra not found
 
 Install Ghidra:
   brew install ghidra
@@ -237,6 +209,44 @@ Or set GHIDRA_HOME:
 
 Or pass --ghidra-home:
   unflutter decompile --ghidra-home /path/to/ghidra --in <dir>`)
+}
+
+// probeGhidraHome checks if a directory contains analyzeHeadless.
+// Handles both direct layout (home/support/analyzeHeadless) and
+// Caskroom layout (home/ghidra_*/support/analyzeHeadless).
+// For Ghidra 12+ with pyghidraRun, returns a launcher that uses it
+// so Python scripts work (PyGhidra replaces Jython).
+func probeGhidraHome(home string) (launcher ghidraLauncher, ghidraHome string, ok bool) {
+	// Direct: home/support/analyzeHeadless
+	ah := filepath.Join(home, "support", "analyzeHeadless")
+	if _, err := os.Stat(ah); err == nil {
+		return makeLauncher(home, ah), home, true
+	}
+	// Caskroom: home/ghidra_*_PUBLIC/support/analyzeHeadless
+	if subs, err := os.ReadDir(home); err == nil {
+		for _, sub := range subs {
+			if !sub.IsDir() {
+				continue
+			}
+			subHome := filepath.Join(home, sub.Name())
+			ah = filepath.Join(subHome, "support", "analyzeHeadless")
+			if _, err := os.Stat(ah); err == nil {
+				return makeLauncher(subHome, ah), subHome, true
+			}
+		}
+	}
+	return ghidraLauncher{}, "", false
+}
+
+// makeLauncher returns a ghidraLauncher for the given Ghidra home.
+// If pyghidraRun exists (Ghidra 12+), uses it with -H flag so Python scripts work.
+// Otherwise falls back to analyzeHeadless directly.
+func makeLauncher(home, analyzeHeadless string) ghidraLauncher {
+	pyghidra := filepath.Join(home, "support", "pyghidraRun")
+	if _, err := os.Stat(pyghidra); err == nil {
+		return ghidraLauncher{cmd: pyghidra, prefix: []string{"-H"}}
+	}
+	return ghidraLauncher{cmd: analyzeHeadless}
 }
 
 // deriveGhidraHome reads the ghidraRun shell script to find the real install path.
