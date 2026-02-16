@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"unflutter/internal/pipeline"
 )
@@ -140,6 +141,9 @@ func cmdGhidra(args []string) error {
 
 	cmd := exec.Command(ghLauncher.cmd, append(ghLauncher.prefix, ghidraArgs...)...)
 	cmd.Env = env
+	// Pipe "y" to stdin so pyghidraRun's first-run "install PyGhidra?" prompt
+	// doesn't block or crash with EOFError.
+	cmd.Stdin = strings.NewReader("y\n")
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 

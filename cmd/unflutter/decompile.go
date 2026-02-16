@@ -126,7 +126,8 @@ func cmdDecompile(args []string) error {
 
 	cmd := exec.Command(ghLauncher.cmd, append(ghLauncher.prefix, ghidraArgs...)...)
 	cmd.Env = env
-	cmd.Stdout = os.Stderr // Ghidra output goes to stderr.
+	cmd.Stdin = strings.NewReader("y\n")
+	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
