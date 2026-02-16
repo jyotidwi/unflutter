@@ -145,6 +145,7 @@ def apply_metadata(meta, idc, ida_funcs, ida_typeinf, ida_auto=None):
         name = entry["name"]
         size = entry.get("size", 0)
 
+        # Split mid-function addresses (Dart checked/unchecked entries).
         fn = ida_funcs.get_func(addr)
         if fn is not None and fn.start_ea != addr:
             ida_funcs.del_func(fn.start_ea)
@@ -521,10 +522,10 @@ def _retype_ida_registers(cfunc, ea, ida_hexrays, has_thr_fields):
         # declarations when both x-reg and w-reg appear in decompilation
         "w15": ("SHADOW_SP_lo", int_tinfo),
         "w21": ("DT_lo",        int_tinfo),
-        "w22": ("NULL_lo",      int_tinfo),
+        "w22": ("DART_NULL_lo", int_tinfo),
         "w26": ("THR_lo",       int_tinfo),
         "w27": ("PP_lo",        int_tinfo),
-        "w28": ("HEAP_lo",      int_tinfo),
+        "w28": ("HEAP_BASE_lo", int_tinfo),
         "w29": ("FP_lo",        int_tinfo),
         "w30": ("LR_lo",        int_tinfo),
     }

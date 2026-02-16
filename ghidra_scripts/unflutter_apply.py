@@ -531,10 +531,10 @@ def _retype_dart_registers(hfunc, dart_thread_ptr_dt, ptr_type):
         # duplicate variable declarations when both x-reg and w-reg appear
         "unaff_w15": ("SHADOW_SP_lo", int_type),
         "unaff_w21": ("DT_lo",        int_type),
-        "unaff_w22": ("NULL_lo",      int_type),
+        "unaff_w22": ("DART_NULL_lo", int_type),
         "unaff_w26": ("THR_lo",       int_type),
         "unaff_w27": ("PP_lo",        int_type),
-        "unaff_w28": ("HEAP_lo",      int_type),
+        "unaff_w28": ("HEAP_BASE_lo", int_type),
         "unaff_w29": ("FP_lo",        int_type),
         "unaff_w30": ("LR_lo",        int_type),
         # Upper 32-bit halves (Ghidra register-space offsets)
