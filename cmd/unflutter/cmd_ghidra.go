@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"unflutter/internal/pipeline"
 )
@@ -18,11 +17,12 @@ func cmdGhidra(args []string) error {
 	outDir := fs.String("out", "", "output directory (default: <basename>.unflutter/)")
 	ghidraHome := fs.String("ghidra-home", "", "Ghidra installation directory")
 	all := fs.Bool("all", false, "decompile ALL functions")
+	gui := fs.Bool("gui", false, "launch Ghidra GUI after generating artifacts")
 	maxSteps := fs.Int("max-steps", 0, "global loop cap")
 	var quiet bool
 	fs.BoolVar(&quiet, "quiet", false, "suppress verbose output")
 	fs.BoolVar(&quiet, "q", false, "suppress verbose output")
-	var _verbose bool // accepted for backwards compat, now default
+	var _verbose bool
 	fs.BoolVar(&_verbose, "verbose", false, "")
 	fs.BoolVar(&_verbose, "v", false, "")
 	projectDir := fs.String("projects", "scratch/ghidra-projects", "Ghidra project directory")
@@ -79,9 +79,18 @@ func cmdGhidra(args []string) error {
 		metaPath = filepath.Join(pipeResult.OutDir, "flutter_meta.json")
 	}
 
-	// Step 2: Copy scripts into artifact directory.
+	// Step 2: Copy scripts into artifact directory and use that as scriptPath.
+	// This ensures Ghidra always finds both scripts, regardless of install layout.
+	absOutDir, _ := filepath.Abs(pipeResult.OutDir)
+	scriptPath := filepath.Join(absOutDir, "ghidra")
 	if copyErr := copyGhidraArtifacts(pipeResult.OutDir); copyErr != nil {
 		fmt.Fprintf(os.Stderr, "warning: could not copy Ghidra scripts: %v\n", copyErr)
+		// Fallback: find scripts in their original location.
+		var findErr error
+		scriptPath, findErr = findScriptPath()
+		if findErr != nil {
+			return fmt.Errorf("Ghidra scripts not found: %v (copy also failed: %v)", findErr, copyErr)
+		}
 	}
 
 	// Step 3: Find Ghidra.
@@ -91,7 +100,12 @@ func cmdGhidra(args []string) error {
 	}
 	fmt.Fprintf(os.Stderr, "ghidra: %s\n", ghHome)
 
-	// Step 4: Run headless analysis.
+	// Step 4: Handle --gui (launch interactive Ghidra).
+	if *gui {
+		return launchGhidraGUI(ghHome, absLibPath, pipeResult.OutDir)
+	}
+
+	// Step 5: Run headless analysis.
 	decompDir := filepath.Join(pipeResult.OutDir, "decompiled")
 	absMetaPath, _ := filepath.Abs(metaPath)
 	absDecompDir, _ := filepath.Abs(decompDir)
@@ -104,11 +118,6 @@ func cmdGhidra(args []string) error {
 	absProjDir, _ := filepath.Abs(*projectDir)
 	if err := os.MkdirAll(absProjDir, 0o755); err != nil {
 		return fmt.Errorf("create project dir: %w", err)
-	}
-
-	scriptPath, err := findScriptPath()
-	if err != nil {
-		return err
 	}
 
 	if *all {
@@ -141,9 +150,6 @@ func cmdGhidra(args []string) error {
 
 	cmd := exec.Command(ghLauncher.cmd, append(ghLauncher.prefix, ghidraArgs...)...)
 	cmd.Env = env
-	// Pipe "y" to stdin so pyghidraRun's first-run "install PyGhidra?" prompt
-	// doesn't block or crash with EOFError.
-	cmd.Stdin = strings.NewReader("y\n")
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 
@@ -156,3 +162,39 @@ func cmdGhidra(args []string) error {
 
 	return nil
 }
+
+// launchGhidraGUI starts Ghidra in interactive mode and prints instructions.
+func launchGhidraGUI(ghidraHome, libPath, outDir string) error {
+	ghidraRun := filepath.Join(ghidraHome, "ghidraRun")
+	if _, err := os.Stat(ghidraRun); err != nil {
+		return fmt.Errorf("ghidraRun not found at %s", ghidraRun)
+	}
+
+	scriptPath, err := findScriptPath()
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, "\nLaunching Ghidra GUI...\n")
+	fmt.Fprintf(os.Stderr, "  1. Import: %s\n", libPath)
+	fmt.Fprintf(os.Stderr, "  2. Open Script Manager (Window → Script Manager)\n")
+	fmt.Fprintf(os.Stderr, "  3. Add script directory: %s\n", scriptPath)
+	fmt.Fprintf(os.Stderr, "  4. Run unflutter_prescript.py first, then unflutter_apply.py\n")
+	fmt.Fprintf(os.Stderr, "     (or pass flutter_meta.json path as script argument)\n")
+	fmt.Fprintf(os.Stderr, "  Meta: %s/flutter_meta.json\n\n", outDir)
+
+	env := os.Environ()
+	if os.Getenv("JAVA_HOME") == "" {
+		javaHome := findJavaHome(ghidraHome)
+		if javaHome != "" {
+			env = append(env, "JAVA_HOME="+javaHome)
+		}
+	}
+
+	cmd := exec.Command(ghidraRun)
+	cmd.Env = env
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	return cmd.Start()
+}
+

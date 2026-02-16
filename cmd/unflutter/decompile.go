@@ -126,8 +126,7 @@ func cmdDecompile(args []string) error {
 
 	cmd := exec.Command(ghLauncher.cmd, append(ghLauncher.prefix, ghidraArgs...)...)
 	cmd.Env = env
-	cmd.Stdin = strings.NewReader("y\n")
-	cmd.Stdout = os.Stderr
+	cmd.Stdout = os.Stderr // Ghidra output goes to stderr.
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Run(); err != nil {
@@ -285,8 +284,8 @@ func deriveGhidraHome(ghidraRunPath string) string {
 }
 
 // findScriptPath returns the path to the ghidra_scripts directory.
+// Validates that ALL required scripts exist, not just one.
 func findScriptPath() (string, error) {
-	// Try relative to the binary.
 	exe, _ := os.Executable()
 	exeDir := filepath.Dir(exe)
 
@@ -298,14 +297,23 @@ func findScriptPath() (string, error) {
 		filepath.Join(exeDir, "..", "ghidra_scripts"),
 	}
 
+	required := []string{"unflutter_apply.py", "unflutter_prescript.py"}
+
 	for _, c := range candidates {
 		abs, _ := filepath.Abs(c)
-		if _, err := os.Stat(filepath.Join(abs, "unflutter_apply.py")); err == nil {
+		allFound := true
+		for _, req := range required {
+			if _, err := os.Stat(filepath.Join(abs, req)); err != nil {
+				allFound = false
+				break
+			}
+		}
+		if allFound {
 			return abs, nil
 		}
 	}
 
-	return "", fmt.Errorf("cannot find ghidra_scripts/unflutter_apply.py; run from the unflutter project root")
+	return "", fmt.Errorf("cannot find ghidra_scripts/ with both unflutter_apply.py and unflutter_prescript.py\n  checked: %s\n  fix: run 'make install' or run from the unflutter project root", strings.Join(candidates, ", "))
 }
 
 // findJavaHome tries to locate a suitable JDK for Ghidra.
@@ -345,3 +353,4 @@ func findJavaHome(ghidraHome string) string {
 
 	return ""
 }
+
