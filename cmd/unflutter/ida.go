@@ -71,6 +71,7 @@ func findIDAScript() (string, error) {
 
 	candidates := []string{
 		filepath.Join(homeDir, ".unflutter", "ida_scripts", "unflutter_apply.py"),
+		filepath.Join(homeDir, ".unflutter", "unflutter_apply.py"),
 		filepath.Join(exeDir, "ida_scripts", "unflutter_apply.py"),
 		"ida_scripts/unflutter_apply.py",
 		filepath.Join(exeDir, "..", "ida_scripts", "unflutter_apply.py"),

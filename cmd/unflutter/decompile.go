@@ -77,13 +77,10 @@ func cmdDecompile(args []string) error {
 	absLibPath, _ := filepath.Abs(*libPath)
 
 	// Ghidra project name from the input directory.
-	projectName := "unflutter_" + filepath.Base(filepath.Dir(*inDir))
-	if projectName == "unflutter_." {
-		projectName = "unflutter_decompile"
-	}
+	projectName := sanitizeProjectName(filepath.Base(filepath.Dir(*inDir)))
 
 	// 5. Create project directory.
-	absProjDir, _ := filepath.Abs(*projectDir)
+	absProjDir := sanitizeGhidraPath(*projectDir)
 	if err := os.MkdirAll(absProjDir, 0o755); err != nil {
 		return fmt.Errorf("create project dir: %w", err)
 	}
@@ -292,6 +289,7 @@ func findScriptPath() (string, error) {
 	homeDir, _ := os.UserHomeDir()
 	candidates := []string{
 		filepath.Join(homeDir, ".unflutter", "ghidra_scripts"),
+		filepath.Join(homeDir, ".unflutter"),
 		filepath.Join(exeDir, "ghidra_scripts"),
 		"ghidra_scripts",
 		filepath.Join(exeDir, "..", "ghidra_scripts"),
@@ -352,5 +350,31 @@ func findJavaHome(ghidraHome string) string {
 	}
 
 	return ""
+}
+
+// sanitizeProjectName builds a Ghidra project name from a directory basename.
+// Strips characters that Java/Ghidra reject in project names (colon, etc.).
+func sanitizeProjectName(base string) string {
+	if base == "" || base == "." {
+		return "unflutter_decompile"
+	}
+	clean := strings.Map(func(r rune) rune {
+		if r == ':' || r == '\\' || r == '"' || r == '<' || r == '>' || r == '|' || r == '?' || r == '*' {
+			return '_'
+		}
+		return r
+	}, base)
+	return "unflutter_" + clean
+}
+
+// sanitizeGhidraPath returns an absolute path safe for Java/Ghidra.
+// If the resolved path contains ':', relocates to ~/.unflutter/ghidra-projects/.
+func sanitizeGhidraPath(projectDir string) string {
+	abs, _ := filepath.Abs(projectDir)
+	if !strings.Contains(abs, ":") {
+		return abs
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".unflutter", "ghidra-projects")
 }
 

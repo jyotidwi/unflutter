@@ -66,16 +66,26 @@ parity: build
 	./$(BINARY) parity --samples scratch/samples --out out/parity
 
 install: build
+	install -d ~/.unflutter/bin
 	install -d ~/.unflutter/ghidra_scripts
 	install -d ~/.unflutter/ida_scripts
-	install -m 755 $(BINARY) /usr/local/bin/$(BINARY)
+	install -m 755 $(BINARY) ~/.unflutter/bin/$(BINARY)
 	install -m 644 ghidra_scripts/*.py ~/.unflutter/ghidra_scripts/
 	install -m 644 ida_scripts/*.py ~/.unflutter/ida_scripts/
-	@echo "installed: /usr/local/bin/$(BINARY)"
+	@echo ""
+	@echo "installed: ~/.unflutter/bin/$(BINARY)"
 	@echo "installed: ~/.unflutter/ghidra_scripts/"
-	@ls ~/.unflutter/ghidra_scripts/
 	@echo "installed: ~/.unflutter/ida_scripts/"
-	@ls ~/.unflutter/ida_scripts/
+	@echo ""
+	@if command -v unflutter >/dev/null 2>&1; then \
+		echo "unflutter is already in PATH"; \
+	else \
+		RC=~/.zshrc; \
+		[ -f ~/.bashrc ] && [ ! -f ~/.zshrc ] && RC=~/.bashrc; \
+		echo "Add to PATH:"; \
+		echo "  echo 'export PATH=\"\$$HOME/.unflutter/bin:\$$PATH\"' >> $$RC"; \
+		echo "  source $$RC"; \
+	fi
 
 clean:
 	rm -f $(BINARY)

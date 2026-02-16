@@ -110,12 +110,9 @@ func cmdGhidra(args []string) error {
 	absMetaPath, _ := filepath.Abs(metaPath)
 	absDecompDir, _ := filepath.Abs(decompDir)
 
-	projectName := "unflutter_" + filepath.Base(filepath.Dir(pipeResult.OutDir))
-	if projectName == "unflutter_." {
-		projectName = "unflutter_decompile"
-	}
+	projectName := sanitizeProjectName(filepath.Base(filepath.Dir(pipeResult.OutDir)))
 
-	absProjDir, _ := filepath.Abs(*projectDir)
+	absProjDir := sanitizeGhidraPath(*projectDir)
 	if err := os.MkdirAll(absProjDir, 0o755); err != nil {
 		return fmt.Errorf("create project dir: %w", err)
 	}
