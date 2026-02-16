@@ -527,15 +527,16 @@ def _retype_dart_registers(hfunc, dart_thread_ptr_dt, ptr_type):
         "unaff_x28": ("HEAP_BASE",    long_type),
         "unaff_x29": ("FP",           long_type),
         "unaff_x30": ("LR",           long_type),
-        # 32-bit subregister variants (w-regs) — typed as int to eliminate undefined4
-        "unaff_w15": ("SHADOW_SP",    int_type),
-        "unaff_w21": ("DT",           int_type),
-        "unaff_w22": ("DART_NULL",    int_type),
-        "unaff_w26": ("THR",          int_type),
-        "unaff_w27": ("PP",           int_type),
-        "unaff_w28": ("HEAP_BASE",    int_type),
-        "unaff_w29": ("FP",           int_type),
-        "unaff_w30": ("LR",           int_type),
+        # 32-bit subregister variants (w-regs) — suffixed _lo to avoid
+        # duplicate variable declarations when both x-reg and w-reg appear
+        "unaff_w15": ("SHADOW_SP_lo", int_type),
+        "unaff_w21": ("DT_lo",        int_type),
+        "unaff_w22": ("NULL_lo",      int_type),
+        "unaff_w26": ("THR_lo",       int_type),
+        "unaff_w27": ("PP_lo",        int_type),
+        "unaff_w28": ("HEAP_lo",      int_type),
+        "unaff_w29": ("FP_lo",        int_type),
+        "unaff_w30": ("LR_lo",        int_type),
         # Upper 32-bit halves (Ghidra register-space offsets)
         # These are internal split-register names — type as int
         "unaff_000040b4":         ("DART_NULL_HI", int_type),   # upper x22
