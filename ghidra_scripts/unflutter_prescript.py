@@ -147,6 +147,16 @@ def main():
     except Exception as e:
         println("  WARN: could not disable Non-Returning Functions - Discovered: %s" % str(e)[:60])
 
+    # Decompiler Parameter ID performs heavy p-code varnode context analysis
+    # during auto-analysis. On large Dart AOT binaries (36k+ functions), this
+    # causes "VarnodeContext: out of address spaces" errors. We apply our own
+    # signatures in the postscript, so this analyzer is redundant.
+    try:
+        setAnalysisOption(currentProgram, "Decompiler Parameter ID", "false")
+        println("  disabled: Decompiler Parameter ID")
+    except Exception as e:
+        println("  WARN: could not disable Decompiler Parameter ID: %s" % str(e)[:60])
+
     println("unflutter_prescript: done")
 
 

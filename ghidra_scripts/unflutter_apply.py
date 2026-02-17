@@ -361,6 +361,8 @@ def main():
             os.makedirs(out_dir)
 
         ifc = DecompInterface()
+        # Use "decompile" simplification to reduce VarnodeContext pressure.
+        ifc.setSimplificationStyle("decompile")
         ifc.openProgram(currentProgram)
 
         index = []
@@ -480,6 +482,15 @@ def main():
         println("Phase 3: skipped (no output directory specified)")
     else:
         println("Phase 3: skipped (no focus functions)")
+
+    # Disable Decompiler Parameter ID before exiting.
+    # Ghidra auto-re-analyzes after postScript changes. The re-analysis triggers
+    # "VarnodeContext: out of address spaces" errors on large Dart AOT binaries.
+    # Since we already applied our own signatures, this analyzer is redundant.
+    try:
+        setAnalysisOption(currentProgram, "Decompiler Parameter ID", "false")
+    except:
+        pass
 
     # Summary.
     println("UNFLUTTER_APPLY: functions=%d renamed=%d created=%d labels=%d comments=%d decompiled=%d failed=%d" % (

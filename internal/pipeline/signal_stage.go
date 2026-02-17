@@ -200,7 +200,7 @@ func RunSignalStage(inDir string, k int, noAsm bool, quiet bool, log io.Writer) 
 			svgPath := strings.TrimSuffix(df, ".dot") + ".svg"
 			dfi, _ := os.Stat(df)
 			if dfi != nil && dfi.Size() > largeDOTThreshold {
-				logf("  %s!%s skipping SVG for %s (%d KB) — too large for dot\n",
+				logf("  %s!%s skipping SVG for %s (%d KB), too large for dot\n",
 					cli.Red, cli.Reset, filepath.Base(df), dfi.Size()/1024)
 				logf("    render manually: %ssfdp -Tsvg -o %s %s%s\n",
 					cli.Muted, filepath.Base(svgPath), filepath.Base(df), cli.Reset)
