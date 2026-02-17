@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"unflutter/internal/cli"
 	"unflutter/internal/disasm"
@@ -166,7 +168,7 @@ func RunSignalStage(inDir string, k int, noAsm bool, quiet bool, log io.Writer) 
 		if len(content) > 0 {
 			cfgTitle := "signal CFG"
 			if title != "" {
-				cfgTitle = title + " — signal CFG"
+				cfgTitle = title + " signal CFG"
 			}
 			cfgDOT := render.SignalCFGDOT(g, content, cfgTitle, render.NASA)
 			cfgPath := filepath.Join(inDir, "signal_cfg.dot")
@@ -180,9 +182,13 @@ func RunSignalStage(inDir string, k int, noAsm bool, quiet bool, log io.Writer) 
 	}
 
 	// Render SVG via dot if available.
+	// Large DOT files (>1 MB) are skipped. dot's hierarchical layout is O(n^2)
+	// and hangs on graphs with thousands of nodes. Use sfdp for large graphs.
+	const dotTimeout = 120 * time.Second
+	const largeDOTThreshold = 1 << 20 // 1 MB
 	dotBin, err := exec.LookPath("dot")
 	if err != nil {
-		logf("  %s!%s dot not found — install Graphviz for SVG: %sbrew install graphviz%s\n",
+		logf("  %s!%s dot not found, install Graphviz for SVG: %sbrew install graphviz%s\n",
 			cli.Red, cli.Reset, cli.Gold, cli.Reset)
 	} else {
 		dotFiles := []string{dotPath}
@@ -192,8 +198,24 @@ func RunSignalStage(inDir string, k int, noAsm bool, quiet bool, log io.Writer) 
 		}
 		for _, df := range dotFiles {
 			svgPath := strings.TrimSuffix(df, ".dot") + ".svg"
-			cmd := exec.Command(dotBin, "-Tsvg", "-o", svgPath, df)
-			if out, err := cmd.CombinedOutput(); err != nil {
+			dfi, _ := os.Stat(df)
+			if dfi != nil && dfi.Size() > largeDOTThreshold {
+				logf("  %s!%s skipping SVG for %s (%d KB) — too large for dot\n",
+					cli.Red, cli.Reset, filepath.Base(df), dfi.Size()/1024)
+				logf("    render manually: %ssfdp -Tsvg -o %s %s%s\n",
+					cli.Muted, filepath.Base(svgPath), filepath.Base(df), cli.Reset)
+				continue
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), dotTimeout)
+			cmd := exec.CommandContext(ctx, dotBin, "-Tsvg", "-o", svgPath, df)
+			out, err := cmd.CombinedOutput()
+			cancel()
+			if ctx.Err() == context.DeadlineExceeded {
+				logf("  %s!%s dot timed out after %v for %s\n",
+					cli.Red, cli.Reset, dotTimeout, filepath.Base(df))
+				logf("    render manually: %ssfdp -Tsvg -o %s %s%s\n",
+					cli.Muted, filepath.Base(svgPath), filepath.Base(df), cli.Reset)
+			} else if err != nil {
 				logf("  %s!%s dot render failed for %s: %v\n%s\n", cli.Red, cli.Reset, filepath.Base(df), err, out)
 			} else {
 				fi, _ = os.Stat(svgPath)

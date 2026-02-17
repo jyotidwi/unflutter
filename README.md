@@ -1,14 +1,14 @@
 # unflutter
 
-Static analyzer for Flutter/Dart AOT snapshots. Recovers function names, class hierarchies, call graphs, and behavioral signals from `libapp.so` — without embedding or executing the Dart VM.
+Static analyzer for Flutter/Dart AOT snapshots. Recovers function names, class hierarchies, call graphs, and behavioral signals from `libapp.so`, without embedding or executing the Dart VM.
 
 ## Why Not Blutter
 
-[Blutter](https://github.com/aspect-sec/blutter) solves Flutter reverse engineering by embedding the Dart VM itself. It calls `Dart_Initialize`, creates an isolate group from the snapshot, and walks the deserialized heap with internal VM APIs. No Dart code from the snapshot is executed — the VM is used purely for introspection. But this still means Blutter must compile a matching Dart SDK for every target version and link against VM internals.
+[Blutter](https://github.com/aspect-sec/blutter) solves Flutter reverse engineering by embedding the Dart VM itself. It calls `Dart_Initialize`, creates an isolate group from the snapshot, and walks the deserialized heap with internal VM APIs. No Dart code from the snapshot is executed. The VM is used purely for introspection. But this still means Blutter must compile a matching Dart SDK for every target version and link against VM internals.
 
 unflutter takes a different path. No VM. No SDK compilation. The snapshot is a byte stream with a known grammar. We parse it directly.
 
-The tradeoff: Blutter gets perfect fidelity because it deserializes through the VM's own code paths. unflutter gets portability, speed, and the ability to analyze snapshots from any Dart version without building anything version-specific. The cost is that every format change across Dart versions must be handled explicitly in our parser — there is no runtime to fall back on.
+The tradeoff: Blutter gets perfect fidelity because it deserializes through the VM's own code paths. unflutter gets portability, speed, and the ability to analyze snapshots from any Dart version without building anything version-specific. The cost is that every format change across Dart versions must be handled explicitly in our parser. There is no runtime to fall back on.
 
 ## Design
 
@@ -45,7 +45,7 @@ No heuristics. No runtime fallback. No inference outside constraints.
 
 Dart AOT snapshot = two-phase serialization: **alloc** then **fill**.
 
-**Alloc** walks clusters in CID order. Each cluster declares how many objects of that class exist. This assigns sequential reference IDs to every object. No data is read yet — just counts.
+**Alloc** walks clusters in CID order. Each cluster declares how many objects of that class exist. This assigns sequential reference IDs to every object. No data is read yet, just counts.
 
 **Fill** walks the same clusters again. This time it reads the actual field values: string bytes, reference IDs pointing to other objects, integer scalars. The fill encoding varies by object type and Dart version.
 
@@ -55,7 +55,7 @@ We replay both phases from raw bytes. The alloc phase gives us the object census
 
 The isolate instructions image contains two regions:
 
-**Stubs** (indices 0 through `FirstEntryWithCode-1`): runtime trampolines — type-check handlers, allocation stubs, dispatch helpers — that Dart AOT places before user code.
+**Stubs** (indices 0 through `FirstEntryWithCode-1`): runtime trampolines (type-check handlers, allocation stubs, dispatch helpers) placed before user code.
 
 **Code** (indices `FirstEntryWithCode` onward): user functions and framework code. Each Code object maps to a PC offset via the instructions table.
 
@@ -63,7 +63,7 @@ We resolve both regions, producing a complete function map that covers the entir
 
 ### ARM64 disassembly and call edges
 
-Each function's code bytes are decoded instruction-by-instruction using `arm64asm.Decode`. Branch detection handles B, B.cond, CBZ, CBNZ, TBZ, TBNZ, RET — all from raw 32-bit encodings.
+Each function's code bytes are decoded instruction-by-instruction using `arm64asm.Decode`. Branch detection handles B, B.cond, CBZ, CBNZ, TBZ, TBNZ, RET, all from raw 32-bit encodings.
 
 **CFG construction** follows a 3-phase algorithm:
 1. Collect block leaders: instruction 0, branch targets, instructions after terminators
@@ -88,7 +88,7 @@ Each BLR gets annotated with its provenance (e.g., `PP[42] Widget.build`, `THR.A
 
 ### Graph construction
 
-Call edges and CFGs are converted to [lattice](https://github.com/zboralski/lattice) types — an architecture-neutral graph IR shared with SpiderMonkey-dumper (for JS bytecode analysis). The lattice library provides DOT rendering.
+Call edges and CFGs are converted to [lattice](https://github.com/zboralski/lattice) types, an architecture-neutral graph IR shared with SpiderMonkey-dumper (for JS bytecode analysis). The lattice library provides DOT rendering.
 
 ### Decompilation (Ghidra + IDA)
 
@@ -111,7 +111,7 @@ Both decompilers share a common metadata pipeline. `flutter-meta` generates `flu
 | X15      | `SHADOW_SP`         | Dart shadow call stack                          |
 | X21      | `DT`                | Dispatch table pointer                          |
 | X22      | `DART_NULL`         | Dart null object                                |
-| X26      | `THR` (DartThread*) | Thread pointer — field accesses resolve to names |
+| X26      | `THR` (DartThread*) | Thread pointer, field accesses resolve to names |
 | X27      | `PP`                | Object pool pointer                             |
 | X28      | `HEAP_BASE`         | Compressed pointer base                         |
 | X29      | `FP`                | Frame pointer                                   |
@@ -131,7 +131,7 @@ Ghidra wins on readability: struct field resolution (`THR->stack_limit` vs `THR 
 
 IDA wins on type cleanliness: zero `undefined` types, zero `unaff_` register names, zero warnings. IDA uses `__int64` and `_QWORD` casts which are verbose but type-correct.
 
-The THR struct field resolution gap is a Hex-Rays microcode limitation — `set_lvar_type()` doesn't restructure the decompiler's AST to use struct member syntax.
+The THR struct field resolution gap is a Hex-Rays microcode limitation. `set_lvar_type()` doesn't restructure the decompiler's AST to use struct member syntax.
 
 ### Version handling
 
@@ -316,7 +316,8 @@ Each stage is a pure function from bytes to structured data. No mutable global s
 
 - **AOT only.** No JIT mode support.
 - **ARM64 only.** No x86 or RISC-V.
-- **No source reconstruction.** Output is function names, call edges, structs, strings — not Dart source.
+- **No source reconstruction.** Output is function names, call edges, structs, strings, not Dart source.
 - **BLR tracking window.** Register provenance uses a sliding window (W=8). Complex register chains outside the window are unresolved.
 - **Dart 2.12.x not validated.** No samples available.
+- **Large signal graphs.** DOT files over 1 MB are skipped for SVG rendering. Graphviz `dot` uses O(n²) hierarchical layout that hangs on graphs with thousands of nodes. Use `sfdp -Tsvg` for large graphs.
 - **Every format change must be modeled.** There is no runtime to handle it automatically.
