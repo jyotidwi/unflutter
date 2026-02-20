@@ -188,6 +188,10 @@ var knownHashes = map[string]string{
 	"97ff04a728735e6b6b098bdf983faaba": "3.9.2", // Flutter 3.35.1
 	// Dart 3.10.x (Flutter 3.38.x)
 	"1ce86630892e2dca9a8543fdb8ed8e22": "3.10.7", // Flutter 3.38.4
+	// Dart 3.11.x (Flutter 3.41.x)
+	"78da37fed6bf1489361a312568249f3f": "3.11.0", // Flutter 3.41.1
+	// Dart unstable (main branch, snapshot as of 2026-02-20)
+	"bf2a89a0870c9457c268c1bc89403fe1": "3.12.0-dev", // dart-lang/sdk main
 
 	// Dart 2.14-2.19 (supported with CID tables)
 	"9cf77f4405212c45daf608e1cd646852": "2.14.0", // Flutter 2.5.0
@@ -601,7 +605,7 @@ var cidsV362 = CIDTable{
 	NativePointerCid: 1, NumPredefinedCids: 175,
 }
 
-// v3.9.2 and v3.10.7: the CID table currently hardcoded in cid.go.
+// v3.9.2 through v3.12.0-dev: the CID table currently hardcoded in cid.go.
 var cidsV392 = CIDTable{
 	Class: 5, PatchClass: 6, Function: 7, TypeParameters: 8,
 	ClosureData: 9, FfiTrampolineData: 10, Field: 11, Script: 12,
@@ -648,7 +652,9 @@ var versionProfiles = map[string]*VersionProfile{
 	"3.7.0":  {DartVersion: "3.7.0", Supported: true, HeaderFields: 5, Tags: TagStyleObjectHeader, CIDs: &cidsV362},
 	"3.8.1":  {DartVersion: "3.8.1", Supported: true, HeaderFields: 5, Tags: TagStyleObjectHeader, CIDs: &cidsV362},
 	"3.9.2":  {DartVersion: "3.9.2", Supported: true, HeaderFields: 5, Tags: TagStyleObjectHeader, CIDs: &cidsV392},
-	"3.10.7": {DartVersion: "3.10.7", Supported: true, HeaderFields: 5, Tags: TagStyleObjectHeader, CIDs: &cidsV392},
+	"3.10.7":    {DartVersion: "3.10.7", Supported: true, HeaderFields: 5, Tags: TagStyleObjectHeader, CIDs: &cidsV392},
+	"3.11.0":    {DartVersion: "3.11.0", Supported: true, HeaderFields: 5, Tags: TagStyleObjectHeader, CIDs: &cidsV392},
+	"3.12.0-dev": {DartVersion: "3.12.0-dev", Supported: true, HeaderFields: 5, Tags: TagStyleObjectHeader, CIDs: &cidsV392},
 }
 
 // DetectVersion returns a VersionProfile for the given snapshot hash.
