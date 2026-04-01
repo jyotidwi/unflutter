@@ -909,6 +909,7 @@ func readFillCode(s *dartfmt.Stream, cm *ClusterMeta, ct *snapshot.CIDTable, fil
 	discardedCount := 0
 	for i := int64(0); i < cm.Count; i++ {
 		var payloadInfo int64
+		var textOff int64
 		clusterIndex := -1
 		traceCode := debugFill && i < 5
 
@@ -932,9 +933,11 @@ func readFillCode(s *dartfmt.Stream, cm *ClusterMeta, ct *snapshot.CIDTable, fil
 		// Deferred codes: ReadInstructions does nothing (early return).
 		if i < cm.MainCount {
 			if textOffsetDelta {
-				if _, err := s.ReadUnsigned(); err != nil {
+				tod, err := s.ReadUnsigned()
+				if err != nil {
 					return codes, fmt.Errorf("code %d/%d text_offset_delta: %w", i, cm.Count, err)
 				}
+				textOff = tod
 			}
 			pi, err := s.ReadUnsigned()
 			if err != nil {
@@ -1038,6 +1041,7 @@ func readFillCode(s *dartfmt.Stream, cm *ClusterMeta, ct *snapshot.CIDTable, fil
 			OwnerRef:     ownerRef,
 			ClusterIndex: clusterIndex,
 			PayloadInfo:  payloadInfo,
+			TextOffset:   textOff,
 		})
 		ref++
 	}

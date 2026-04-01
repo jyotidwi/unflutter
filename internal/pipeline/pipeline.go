@@ -131,18 +131,25 @@ func Run(opts Opts) (*Result, error) {
 	}
 
 	// Step 3: Parse instructions table + resolve code ranges.
+	// Pre-InstructionsTable versions (v2.10-v2.15) have InstructionTableDataOffset=0;
+	// use TextOffset from Code fill instead.
+	var ranges []cluster.CodeRange
 	table, err := cluster.ParseInstructionsTable(data, &clResult.Header, info.Version, info.IsolateHeader)
-	if err != nil {
+	if err != nil && clResult.Header.InstructionTableDataOffset == 0 && info.Version.CodeTextOffsetDelta {
+		// Pre-InstructionsTable: build ranges from TextOffset.
+		codeRanges := cluster.ResolveCodeRangesFromTextOffset(clResult.Codes)
+		ranges = codeRanges
+		table = nil
+	} else if err != nil {
 		return nil, fmt.Errorf("instrtable: %w", err)
+	} else {
+		codeRanges, err := cluster.ResolveCodeRanges(clResult.Codes, table)
+		if err != nil {
+			return nil, fmt.Errorf("code ranges: %w", err)
+		}
+		stubRanges := cluster.ResolveStubRanges(table)
+		ranges = cluster.MergeRanges(stubRanges, codeRanges)
 	}
-
-	codeRanges, err := cluster.ResolveCodeRanges(clResult.Codes, table)
-	if err != nil {
-		return nil, fmt.Errorf("code ranges: %w", err)
-	}
-
-	stubRanges := cluster.ResolveStubRanges(table)
-	ranges := cluster.MergeRanges(stubRanges, codeRanges)
 
 	code, codeOff, payloadLen, err := snapshot.CodeRegion(info.IsolateInstructions.Data)
 	if err != nil {
@@ -155,10 +162,15 @@ func Run(opts Opts) (*Result, error) {
 
 	opts.stagef("code", "%s%d%s bytes at VA %s0x%x%s",
 		cli.Gold, payloadLen, cli.Reset, cli.Blue, codeVA, cli.Reset)
-	opts.logf("  %sinstructions:%s %d entries (%d stubs + %d code)\n",
-		cli.Muted, cli.Reset, table.Length, table.FirstEntryWithCode, int(table.Length)-int(table.FirstEntryWithCode))
-	opts.logf("  %sranges:%s %d (%d stubs + %d code)\n",
-		cli.Muted, cli.Reset, len(ranges), len(stubRanges), len(codeRanges))
+	if table != nil {
+		opts.logf("  %sinstructions:%s %d entries (%d stubs + %d code)\n",
+			cli.Muted, cli.Reset, table.Length, table.FirstEntryWithCode, int(table.Length)-int(table.FirstEntryWithCode))
+	} else {
+		opts.logf("  %sinstructions:%s text-offset mode (%d code ranges)\n",
+			cli.Muted, cli.Reset, len(ranges))
+	}
+	opts.logf("  %sranges:%s %d\n",
+		cli.Muted, cli.Reset, len(ranges))
 
 	// Create output directory.
 	if err := os.MkdirAll(opts.OutDir, 0755); err != nil {

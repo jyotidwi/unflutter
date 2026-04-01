@@ -72,15 +72,18 @@ func cmdTHRAudit(args []string) error {
 		return fmt.Errorf("fill: %w", err)
 	}
 
-	// Parse instructions table.
+	// Parse instructions table (or use text-offset fallback for pre-v2.16).
+	var ranges []cluster.CodeRange
 	table, err := cluster.ParseInstructionsTable(data, &result.Header, info.Version, info.IsolateHeader)
-	if err != nil {
+	if err != nil && result.Header.InstructionTableDataOffset == 0 && info.Version.CodeTextOffsetDelta {
+		ranges = cluster.ResolveCodeRangesFromTextOffset(result.Codes)
+	} else if err != nil {
 		return fmt.Errorf("instrtable: %w", err)
-	}
-
-	ranges, err := cluster.ResolveCodeRanges(result.Codes, table)
-	if err != nil {
-		return fmt.Errorf("code ranges: %w", err)
+	} else {
+		ranges, err = cluster.ResolveCodeRanges(result.Codes, table)
+		if err != nil {
+			return fmt.Errorf("code ranges: %w", err)
+		}
 	}
 
 	code, codeOff, payloadLen, err := snapshot.CodeRegion(info.IsolateInstructions.Data)

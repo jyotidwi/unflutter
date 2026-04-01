@@ -71,6 +71,7 @@ type CodeEntry struct {
 	OwnerRef     int   // ref ID of the owning Function/Closure/FfiTrampolineData
 	ClusterIndex int   // implicit instructions_index_ (main codes only; -1 for deferred)
 	PayloadInfo  int64 // raw payload_info from fill (0 for deferred)
+	TextOffset   int64 // text_offset_delta from fill (v2.10-v2.15 only; 0 otherwise)
 }
 
 // PoolEntryKind distinguishes ObjectPool entry types.

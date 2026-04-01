@@ -216,6 +216,38 @@ func SetLastRangeSize(ranges []CodeRange, codeEndOffset uint32) {
 	}
 }
 
+// ResolveCodeRangesFromTextOffset builds CodeRange entries directly from
+// CodeEntry.TextOffset values (v2.10-v2.15, pre-InstructionsTable era).
+// TextOffset is the direct byte offset into the instructions image for each
+// Code object's instructions. Returns sorted ranges with sizes computed from
+// adjacent offsets. Caller must call SetLastRangeSize on the result.
+func ResolveCodeRangesFromTextOffset(codes []CodeEntry) []CodeRange {
+	var ranges []CodeRange
+	for i := range codes {
+		c := &codes[i]
+		if c.ClusterIndex < 0 {
+			continue // deferred code, no instructions
+		}
+		ranges = append(ranges, CodeRange{
+			RefID:    c.RefID,
+			OwnerRef: c.OwnerRef,
+			Index:    c.ClusterIndex,
+			PCOffset: uint32(c.TextOffset),
+		})
+	}
+
+	sort.Slice(ranges, func(i, j int) bool {
+		return ranges[i].PCOffset < ranges[j].PCOffset
+	})
+
+	// Compute sizes by diffing adjacent offsets.
+	for i := 0; i < len(ranges)-1; i++ {
+		ranges[i].Size = ranges[i+1].PCOffset - ranges[i].PCOffset
+	}
+
+	return ranges
+}
+
 func roundUp(v, align int64) int64 {
 	return (v + align - 1) &^ (align - 1)
 }
