@@ -1,0 +1,36 @@
+name: Sync with Upstream
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # Every day at midnight
+  workflow_dispatch: # Allows manual triggering
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Full history for merge
+
+      - name: Sync with Upstream
+        run: |
+          # Set up git user
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Add upstream remote
+          git remote add upstream https://github.com/zboralski/unflutter.git
+          
+          # Fetch upstream changes
+          git fetch upstream main
+          
+          # Checkout local main branch
+          git checkout main
+          
+          # Merge upstream changes into local main
+          git merge upstream/main --no-edit
+          
+          # Push changes back to your fork
+          git push origin main

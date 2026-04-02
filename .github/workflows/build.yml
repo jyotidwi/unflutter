@@ -1,0 +1,60 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    name: Build and Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.4'
+          cache: true
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+      - name: Security Check (govulncheck)
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+      - name: Build
+        run: go build -v -o unflutter ./cmd/unflutter
+
+      - name: Run tests
+        run: go test -v ./...
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: unflutter-binary
+          path: unflutter
+
+  unpack:
+    name: Unpack Artifact
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: unflutter-binary
+          path: unpacked-binary
+
+      - name: List unpacked files
+        run: ls -R unpacked-binary

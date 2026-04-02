@@ -1,4 +1,4 @@
-.PHONY: build test fuzz boot clean scan disasm render report skills flutter-meta ghidra inventory parity install
+.PHONY: build test fuzz boot clean scan disasm render report skills flutter-meta ghidra inventory parity install fmt lint tidy
 
 BINARY := unflutter
 SAMPLE ?= samples/blutter-lce.so
@@ -12,6 +12,15 @@ build:
 
 test:
 	go test ./...
+
+fmt:
+	go fmt ./...
+
+lint:
+	golangci-lint run ./...
+
+tidy:
+	go mod tidy
 
 fuzz:
 	go test -fuzz=FuzzELFOpen -fuzztime=30s ./internal/elfx/
