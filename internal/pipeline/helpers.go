@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"unflutter/internal/cluster"
@@ -331,25 +332,15 @@ func QualifiedName(ownerName, funcName string, pcOffset uint32) string {
 }
 
 // SanitizeFilename makes a string safe for use as a filename.
-// Strips non-printable and non-UTF8 bytes, replaces filesystem-unsafe characters.
+// Strips non-printable runes and replaces filesystem-unsafe characters.
 func SanitizeFilename(name string) string {
-	// First strip non-printable and non-UTF8 bytes.
-	var clean []byte
-	for i := 0; i < len(name); i++ {
-		b := name[i]
-		if b >= 0x20 && b < 0x7f {
-			clean = append(clean, b)
-		} else if b >= 0x80 {
-			// Check if valid UTF-8 start byte.
-			_, size := utf8.DecodeRuneInString(name[i:])
-			if size > 1 {
-				clean = append(clean, name[i:i+size]...)
-				i += size - 1
-			} else {
-				clean = append(clean, '_')
-			}
+	// Strip non-printable runes (keeps valid Unicode including CJK, emoji, etc.).
+	var clean strings.Builder
+	for _, r := range name {
+		if r == utf8.RuneError || !unicode.IsPrint(r) {
+			clean.WriteByte('_')
 		} else {
-			clean = append(clean, '_')
+			clean.WriteRune(r)
 		}
 	}
 	r := strings.NewReplacer(
@@ -364,7 +355,7 @@ func SanitizeFilename(name string) string {
 		"|", "_",
 		" ", "_",
 	)
-	s := r.Replace(string(clean))
+	s := r.Replace(clean.String())
 	if len(s) > 200 {
 		s = s[:200]
 	}
